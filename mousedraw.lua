@@ -47,21 +47,6 @@ function sprite_scale()
   return math.min(sx, sy)
 end
 
--- Highlight color for a pressed zone, else nil
-
--- Highlight color for a pressed zone, else nil. The
--- right zone also lights briefly on a raw-Esc click.
-
-function btn_color(zone)
-  if mm.btn[zone] then
-    return LEGO[zone]
-  end
-  if zone == "right" and 0 < mm.right_flash then
-    return LEGO.right
-  end
-  return nil
-end
-
 -- Blink color while the cheese delight is active
 
 function delight_color()
@@ -73,36 +58,43 @@ function delight_color()
   return LEGO_BLINK[i]
 end
 
--- A button's effective tint: delight overrides press
-
-function zone_tint(zone)
-  return delight_color() or btn_color(zone)
-end
-
--- Draw one tintable zone. A pressed zone also shifts
--- down slightly; the delight blink only recolors.
+-- A zone blinks through LEGO colors during the cheese
+-- delight; otherwise it shows its press glow.
 
 function draw_zone(layer, zone)
-  local tint = zone_tint(zone)
-  if not tint then
+  local blink = delight_color()
+  if blink then
+    set_color(blink)
+    layer()
     return
   end
-  set_color(tint)
-  if mm.btn[zone] then
-    gfx.push("all")
-    gfx.translate(0, MOUSE_TUNE.press_shift)
-    layer()
-    gfx.pop()
-  else
-    layer()
+  draw_press(layer, zone)
+end
+
+-- Pressed look: shift down, fill the zone color, then an
+-- additive pass for a soft glow. Both scale with the
+-- eased press amount, so button-up fades to neutral.
+
+function draw_press(layer, zone)
+  local a = mm.glow[zone]
+  if a <= GLOW.eps then
+    return
   end
+  gfx.push("all")
+  gfx.translate(0, MOUSE_TUNE.press_shift * a)
+  set_color(LEGO[zone], a)
+  layer()
+  gfx.setBlendMode("add")
+  set_color(LEGO[zone], a * GLOW.add)
+  layer()
+  gfx.pop()
 end
 
 -- Pick the wink phase layer from delight progress.
 -- Called only while delight is active (see draw_logo_layer).
 
 function wink_phase()
-  local p = 1 - mm.delight / DELIGHT.wink_time
+  local p = 1 - mm.wink / DELIGHT.wink_time
   if p < DELIGHT.wink_p1 then
     return logo_wink_0
   end
@@ -124,7 +116,11 @@ function draw_logo_layer()
   else
     gfx.push("all")
     gfx.translate(WINK_OFF.x, WINK_OFF.y)
-    wink_phase()()
+    if mm.wink <= 0 then
+      logo_wink_0()
+    else
+      wink_phase()()
+    end
     gfx.pop()
   end
 end
@@ -144,9 +140,20 @@ function draw_mouse_layers()
   draw_logo_layer()
 end
 
+-- Soft shadow under the mouse: a flat ellipse near the
+-- base. Not tilted, so a bump lift reads against it.
+
+function draw_shadow()
+  local hx, hy = mm_half()
+  set_color(SHADOW.c, SHADOW.alpha)
+  gfx.ellipse("fill", mm.x, mm.y + hy * SHADOW.dy,
+    hx * SHADOW.rx, hx * SHADOW.ry)
+end
+
 function draw_mouse_sprite()
   local s = sprite_scale()
   local push = (0 < mm.bump) and bump_push() or 0
+  draw_shadow()
   gfx.push("all")
   gfx.translate(mm.x, mm.y - push)
   gfx.rotate(mm.tilt)
@@ -163,21 +170,23 @@ function bump_push()
   return math.sin(p * math.pi) * BUMP.recoil
 end
 
--- Wheel scroll: 3 pellets wrapping in the window,
--- plus a direction arrow above or below. Drawn in
--- sprite space (window from the MOUSE04 layout).
+-- Wheel scroll: 3 pellets wrapping inside the slot.
+-- They travel an inset band so a margin equal to the
+-- side gap is kept above and below (never flush).
+-- Plus a direction arrow above or below.
 
 function pellet_y(i)
-  local off = mm.wheel * WHEEL_WIN.gap
-  local y = off + i * WHEEL_WIN.gap
-  return WHEEL_WIN.win_y + (y % WHEEL_WIN.win_h)
+  local n = WHEEL.pellets
+  local travel = WHEEL_WIN.band_h - WHEEL_WIN.pel_h
+  local phase = (mm.wheel + i / n) % 1
+  return WHEEL_WIN.band_top + phase * travel
 end
 
 function draw_pellets()
   set_color(WHEEL_WIN.pel_c)
   for i = 0, WHEEL.pellets - 1 do
     local y = pellet_y(i)
-    gfx.rectangle("fill", WHEEL_WIN.win_x, y,
+    gfx.rectangle("fill", WHEEL_WIN.pel_x, y,
       WHEEL_WIN.pel_w, WHEEL_WIN.pel_h,
       WHEEL_WIN.pel_r, WHEEL_WIN.pel_r)
   end
@@ -186,7 +195,7 @@ end
 -- Arrow triangle above (dir<0) or below (dir>0)
 
 function scroll_arrow(dir)
-  local cx = WHEEL_WIN.win_x + WHEEL_WIN.pel_w / 2
+  local cx = WHEEL_WIN.pel_x + WHEEL_WIN.pel_w / 2
   local ay = (dir < 0) and WHEEL_ARR.arr_up
     or WHEEL_ARR.arr_dn
   local h = WHEEL_ARR.arr_h * dir
@@ -216,11 +225,57 @@ function cheese_sprite()
   gfx.pop()
 end
 
--- Barrier stays procedural: a rounded bar in the
--- barrier's local frame (meet.lua sets the transform).
+-- Barrier: a rounded bar in the barrier's local frame
+-- (meet.lua sets the transform).
 
 function barrier_sprite(alpha)
   local l, t = barrier.len, barrier.thick
+  local core = math.max(0, l - t)
   set_color(BARRIER.color, alpha)
-  gfx.rectangle("fill", -l / 2, -t / 2, l, t, t / 3)
+  gfx.rectangle("fill", -core / 2, -t / 2, core, t)
+  gfx.circle("fill", -core / 2, 0, t / 2)
+  gfx.circle("fill", core / 2, 0, t / 2)
+end
+
+-- Neutral mouse icon for the no-mouse screen: body and
+-- logo only, no pressed zones, no tilt. Drawn around the
+-- current transform origin in sprite space.
+
+function mouse_icon()
+  gfx.push("all")
+  gfx.translate(-SP.w / 2, -SP.h / 2)
+  gfx.setColor(1, 1, 1, 1)
+  mouse_body()
+  set_color(LOGO_COLOR)
+  mouse_logo()
+  gfx.pop()
+end
+
+-- Unconnected USB-A plug: shell, contact tongue, and a
+-- trailing cable stub (the trailing cable reads as
+-- "not plugged in"). Drawn around the current origin.
+
+function usb_plug()
+  local w, h = PLUG.w, PLUG.h
+  set_color(PLUG.shell)
+  gfx.rectangle("fill", -w / 2, -h / 2, w, h, 4)
+  set_color(PLUG.metal)
+  local ix = -w / 2 + PLUG.inner
+  gfx.rectangle("fill", ix, -h / 2 + PLUG.inner,
+    w * PLUG.tongue_w, h - PLUG.inner * 2)
+  set_color(PLUG.cable_c)
+  gfx.setLineWidth(PLUG.line_w)
+  gfx.line(w / 2, 0, w / 2 + PLUG.cable, 0)
+end
+
+-- Mouse centered with the plug floating to its right
+
+function draw_plug_pair(cx, cy, s)
+  gfx.push("all")
+  gfx.translate(cx, cy)
+  gfx.scale(s, s)
+  mouse_icon()
+  gfx.translate(SP.w / 2 + NO_MOUSE.plug_gap + PLUG.w / 2, 0)
+  usb_plug()
+  gfx.pop()
 end

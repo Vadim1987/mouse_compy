@@ -32,34 +32,64 @@ function cheese_respawn()
   cheese.min_d = screen_diag() * CHEESE.min_diag_frac
 end
 
--- A point is legal if far enough from the mouse, off
--- the margin, and clear of the barrier (if present).
+function cheese_radius()
+  return CHEESE.size / 2
+end
 
-function cheese_legal(x, y)
-  local dx, dy = x - mm.x, y - mm.y
-  if dx * dx + dy * dy < cheese.min_d * cheese.min_d then
+function cheese_clear_margin(x, y, r)
+  local m = APP.width * CHEESE.margin_frac
+  if x - r < m or APP.width - m < x + r then
     return false
   end
-  if barrier_hit(x, y) then
+  if y - r < m or APP.height - m < y + r then
     return false
   end
   return true
 end
 
--- Sample one random point inside the screen margin
+function cheese_clear_mouse(x, y, r)
+  local hx, hy = mm_half()
+  local dx, dy = x - mm.x, y - mm.y
+  local clear = math.max(hx, hy) + r
+  return clear * clear <= dx * dx + dy * dy
+end
+
+-- A point is legal if far enough from the mouse, off
+-- the margin, clear of the mouse body, and clear of the
+-- barrier (if present).
+
+function cheese_legal(x, y)
+  local r = cheese_radius()
+  if not cheese_clear_margin(x, y, r) then
+    return false
+  end
+  local dx, dy = x - mm.x, y - mm.y
+  if dx * dx + dy * dy < cheese.min_d * cheese.min_d then
+    return false
+  end
+  if not cheese_clear_mouse(x, y, r) then
+    return false
+  end
+  if barrier_hit_disc(x, y, r) then
+    return false
+  end
+  return true
+end
 
 -- Sample a point the mouse center can actually reach:
 -- inside the same wall-clamped rectangle, so the cheese
 -- never lands in the half-sprite dead band at the edges.
 
 function cheese_sample()
-  local hx, hy = mm_half()
-  local x = rand_range(hx, APP.width - hx)
-  local y = rand_range(hy, APP.height - hy)
+  local r = cheese_radius()
+  local m = APP.width * CHEESE.margin_frac + r
+  local x = rand_range(m, APP.width - m)
+  local y = rand_range(m, APP.height - m)
   return x, y
 end
 
--- Run a few tries this frame; relax distance on miss
+-- Run a few tries this frame. On miss, keep searching on
+-- later frames without weakening the spec distance rule.
 
 function cheese_progress()
   if not cheese.searching then
@@ -74,24 +104,20 @@ function cheese_progress()
       return
     end
   end
-  cheese.min_d = cheese.min_d * CHEESE.relax
 end
 
--- Overlap test against the mouse center
-
--- Cheese is caught when the mouse's reach (a fraction
--- of its half-extent) plus the cheese radius covers the
--- gap between centers, not only when centers nearly meet.
+-- Overlap test against the visible mouse body.
 
 function cheese_overlap(x, y)
   if not cheese.active then
     return false
   end
   local hx, hy = mm_half()
-  local reach = math.min(hx, hy) * MOUSE_TUNE.catch_frac
-  local r = reach + CHEESE.size / 2
+  local r = CHEESE.size / 2
   local dx, dy = x - cheese.x, y - cheese.y
-  return dx * dx + dy * dy < r * r
+  local nx = dx / (hx + r)
+  local ny = dy / (hy + r)
+  return nx * nx + ny * ny <= 1
 end
 
 function cheese_draw()
@@ -114,6 +140,7 @@ barrier = {
   alpha = 0,
   fade_dir = 0,
   shaped = false,
+  cheese_seen = 0,
   swap_x = 0,
   swap_y = 0
 }
@@ -121,7 +148,9 @@ barrier = {
 function barrier_clear()
   barrier.active = false
   barrier.shaped = false
+  barrier.cheese_seen = 0
   barrier.alpha = 0
+  barrier.fade_dir = 0
 end
 
 -- Sample orientation and length once for the session
@@ -150,20 +179,33 @@ function barrier_shape()
   barrier.shaped = true
 end
 
--- Pick a legal center: bbox inside the margin, not
--- over the mouse. Resample on overlap.
+-- Rotated bounding-box half-extents of the bar
+
+function barrier_bbox()
+  local c = math.abs(math.cos(barrier.angle))
+  local s = math.abs(math.sin(barrier.angle))
+  local hw = barrier.len / 2 * c + barrier.thick / 2 * s
+  local hh = barrier.len / 2 * s + barrier.thick / 2 * c
+  return hw, hh
+end
+
+-- Pick a legal center: bbox inside the playfield with a
+-- 2% margin, not over the mouse body. Resample on overlap.
 
 function barrier_place(px, py)
-  local m = APP.width * BARRIER.margin
-  for _ = 1, BARRIER.place_tries do
-    local x = rand_range(m, APP.width - m)
-    local y = rand_range(m, APP.height - m)
-    if not barrier_point(x, y, px, py) then
+  local hw, hh = barrier_bbox()
+  local mx = APP.width * BARRIER.margin + hw
+  local my = APP.height * BARRIER.margin + hh
+  local phx, phy = mm_half()
+  local mouse_r = math.max(phx, phy)
+  while true do
+    local x = rand_range(mx, APP.width - mx)
+    local y = rand_range(my, APP.height - my)
+    if not barrier_disc_at(px, py, mouse_r, x, y) then
       barrier.x, barrier.y = x, y
       return
     end
   end
-  barrier.x, barrier.y = APP.width / 2, APP.height / 2
 end
 
 -- True if (px,py) lands within the bar at center x,y
@@ -182,6 +224,30 @@ function barrier_point(x, y, px, py)
   return barrier_local(px, py, x, y)
 end
 
+function barrier_disc_at(px, py, r, cx, cy)
+  local dx, dy = px - cx, py - cy
+  local a = -barrier.angle
+  local c, s = math.cos(a), math.sin(a)
+  local lx = dx * c - dy * s
+  local ly = dx * s + dy * c
+  local qx = clamp(lx, -barrier.len / 2, barrier.len / 2)
+  local qy = clamp(ly, -barrier.thick / 2, barrier.thick / 2)
+  local ex, ey = lx - qx, ly - qy
+  return ex * ex + ey * ey <= r * r
+end
+
+function barrier_hit_disc(px, py, r)
+  if not barrier.active then
+    return false
+  end
+  return barrier_disc_at(px, py, r, barrier.x, barrier.y)
+end
+
+function barrier_hit_mouse(px, py)
+  local hx, hy = mm_half()
+  return barrier_hit_disc(px, py, math.max(hx, hy))
+end
+
 -- Hit test for the mouse against the live barrier
 
 function barrier_hit(px, py)
@@ -197,6 +263,10 @@ end
 -- old bar out, then in at its new spot (in barrier_fade).
 
 function barrier_on_cheese(count, px, py)
+  if count <= barrier.cheese_seen then
+    return
+  end
+  barrier.cheese_seen = count
   if count < BARRIER.first_cheese then
     return
   end
@@ -211,6 +281,10 @@ function barrier_on_cheese(count, px, py)
   end
 end
 
+function barrier_sync_count()
+  barrier_on_cheese(mm.cheese_count, mm.x, mm.y)
+end
+
 -- Place the first barrier and fade it in
 
 function barrier_appear(px, py)
@@ -219,7 +293,8 @@ function barrier_appear(px, py)
   end
   barrier_place(px, py)
   barrier.active = true
-  barrier.fade_dir = 1
+  barrier.alpha = 1
+  barrier.fade_dir = 0
 end
 
 -- Begin a swap: remember the spot, fade the old out
@@ -278,7 +353,8 @@ mm = {
   wheel_vel = 0,
   btn = { },
   cheese_count = 0,
-  delight = 0
+  delight = 0,
+  wink = 0
 }
 
 -- Sprite half-extents in screen pixels
@@ -295,6 +371,7 @@ end
 function reset_mm_timers()
   mm.cheese_count = 0
   mm.delight = 0
+  mm.wink = 0
   mm.cheese_echo = 0
   mm.right_flash = 0
   mm.hit_snd = 0
@@ -303,11 +380,10 @@ function reset_mm_timers()
   mm.move_dir = 0
 end
 
--- Match APP to the real window so the playfield fills
--- the screen on any device, not a fixed 800x480.
+-- Match APP to the target Compy screen.
 
 function sync_screen()
-  APP.width, APP.height = love.graphics.getDimensions()
+  APP.width, APP.height = COMPY_SCREEN.w, COMPY_SCREEN.h
 end
 
 function meet.enter()
@@ -320,8 +396,14 @@ function meet.enter()
   mm.wheel = 0
   mm.wheel_vel = 0
   mm.btn = { }
+  mm.glow = {
+    left = 0,
+    right = 0,
+    wheel = 0
+  }
   reset_mm_timers()
   barrier_clear()
+  barrier_shape()
   cheese_respawn()
   love.mouse.setVisible(false)
   love.mouse.setRelativeMode(true)
@@ -376,9 +458,11 @@ function meet_moved(dx, dy)
   apply_delta(dx, dy)
   if MOUSE_TUNE.jitter < mm.speed then
     mm.move_dir = math.atan2(dy, dx)
+    mm.move_snd = play_gated(SND.move, mm.move_snd,
+      move_gap())
   end
   local wall = clamp_walls()
-  if barrier_hit(mm.x, mm.y) then
+  if barrier_hit_mouse(mm.x, mm.y) then
     mm.x, mm.y = ox, oy
     on_contact()
   elseif wall then
@@ -387,6 +471,36 @@ function meet_moved(dx, dy)
 end
 
 -- Update: tilt toward travel, bump decay, sounds
+
+GLOW_ZONES = {
+  "left",
+  "right",
+  "wheel"
+}
+
+-- Target glow for a zone: lit while held, and the right
+-- zone also lights briefly on a raw-Esc right-click.
+
+function glow_target(zone)
+  if mm.btn[zone] then
+    return 1
+  end
+  if zone == "right" and 0 < mm.right_flash then
+    return 1
+  end
+  return 0
+end
+
+-- Ease each zone's glow toward its target so a press
+-- lights up and a release fades back to neutral.
+
+function update_glow(dt)
+  local k = math.min(1, GLOW.rate * dt)
+  for _, z in ipairs(GLOW_ZONES) do
+    local t = glow_target(z)
+    mm.glow[z] = mm.glow[z] + (t - mm.glow[z]) * k
+  end
+end
 
 function update_tilt(dt)
   local target = 0
@@ -430,6 +544,8 @@ function update_timers(dt)
 end
 
 function meet.update(dt)
+  update_glow(dt)
+  barrier_sync_count()
   if 0 < mm.pause then
     update_pause(dt)
     return
@@ -449,6 +565,7 @@ end
 function on_cheese()
   mm.pause = CHEESE.pause
   mm.delight = CHEESE.pause
+  mm.wink = DELIGHT.wink_time
   play_cheese()
   mm.cheese_count = mm.cheese_count + 1
   cheese_take()
@@ -460,6 +577,7 @@ end
 function update_pause(dt)
   mm.pause = math.max(0, mm.pause - dt)
   mm.delight = math.max(0, mm.delight - dt)
+  mm.wink = math.max(0, mm.wink - dt)
   drain_cheese_echo(dt)
   barrier_fade(dt)
   if mm.pause <= 0 then
@@ -549,7 +667,7 @@ meet.right = meet_right
 
 function meet.draw()
   gfx.clear(MOUSE_BG)
-  cheese_draw()
   barrier_draw()
+  cheese_draw()
   draw_mouse_sprite()
 end

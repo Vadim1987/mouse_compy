@@ -5,6 +5,7 @@
 -- callbacks. Each mini-game lives in its own file.
 
 require("constants")
+require("notch")
 
 gfx = love.graphics
 
@@ -14,17 +15,18 @@ SND = {
   move = "step",
   hit = "knock",
   cheese = "powerup",
-  click = "win"
+  click = "ping",
+  bell = "win",
+  pop = "neutral"
 }
 
--- Local files shipped with the game, by logical name.
--- Filenames stay as delivered until the names are
--- renamed in the standard lib (step, powerup).
--- knock and win already live in the standard lib.
+-- Local sound files, by logical name. When a local file
+-- is listed, it is the spec-selected sound for the event.
 
 LOCAL_SND = {
-  step = "snd/footsteps-5.ogg",
-  powerup = "snd/powerup-8.ogg"
+  step = "footsteps-5.ogg",
+  powerup = "powerup-8.ogg",
+  neutral = "neutral-l4.ogg"
 }
 
 local_cache = { }
@@ -44,17 +46,23 @@ end
 function play_local(name)
   local src = get_local(name)
   src:stop()
-  love.audio.play(src)
+  if src.play then
+    src:play()
+  else
+    love.audio.play(src)
+  end
 end
 
--- Standard-lib sound if present, else local file
+-- Spec-selected local sound if present, else standard lib
 
 function play(name)
+  if LOCAL_SND[name] then
+    play_local(name)
+    return
+  end
   local fn = compy.audio[name]
   if fn then
     fn()
-  elseif LOCAL_SND[name] then
-    play_local(name)
   end
 end
 
@@ -80,19 +88,20 @@ function play_cheese()
   end
 end
 
--- Built mini-games, in display order. Only games that
--- exist in the build are listed; unbuilt ones are
--- simply absent (no disabled placeholders).
+-- Built mini-games, in display order. Only built games
+-- are listed; unbuilt ones are simply absent.
 
 GAMES = {
-  { key = "1", name = "Meet the mouse", mod = "meet" }
+  { key = "1", name = "Meet the mouse", mod = "meet" },
+  { key = "2", name = "Find the glowing circle", mod = "find" },
+  { key = "3", name = "Pop the bubble", mod = "pop" }
 }
 
 -- Menu lifecycle hooks. The menu is static, so these
--- are intentional no-ops; they mirror the game
--- lifecycle and give later menus a place to grow.
+-- are intentional no-ops; they mirror the game lifecycle.
 
 function menu_init()
+  notch_init()
 end
 
 function menu_update(dt)
@@ -127,6 +136,8 @@ function menu_key(k)
 end
 
 require("meet")
+require("find")
+require("pop")
 
 -- App state. mode is "menu" or "game"; active is the
 -- module name of the running mini-game.
@@ -135,11 +146,15 @@ GS = {
   init = false,
   mode = "menu",
   active = nil,
-  focused = true
+  focused = true,
+  saw_mouse = false,
+  saw_touch = false
 }
 
 games = {
-  meet = meet
+  meet = meet,
+  find = find,
+  pop = pop
 }
 
 -- Shared helpers
@@ -157,6 +172,9 @@ end
 function open_game(name)
   GS.active = name
   GS.mode = "game"
+  if games[name].notched then
+    notch_enter(name)
+  end
   games[name].enter()
 end
 
@@ -186,6 +204,11 @@ function ctrl_down()
   return d("lctrl") or d("rctrl")
 end
 
+function alt_down()
+  local d = love.keyboard.isDown
+  return d("lalt") or d("ralt")
+end
+
 
 -- Main loop
 
@@ -196,12 +219,36 @@ function love.focus(f)
   GS.focused = f
 end
 
+-- Touch on Android arrives as a synthetic mouse event
+-- with istouch = true; a real pointer event has it false.
+-- SDL has no mouse-presence query, so presence is assumed
+-- until touch-only use shows up: the no-mouse screen
+-- appears only once touch has fired and no real pointer
+-- ever has. A real pointer event is decisive and sticks.
+
+function note_pointer(istouch)
+  if istouch then
+    GS.saw_touch = true
+    return false
+  end
+  GS.saw_mouse = true
+  return true
+end
+
+function mouse_present()
+  return GS.saw_mouse or not GS.saw_touch
+end
+
 function love.update(dt)
   ensure_init()
+  if not mouse_present() then
+    return
+  end
   if not GS.focused then
     return
   end
   if GS.mode == "game" then
+    notch_tick_active(dt)
     games[GS.active].update(dt)
   else
     menu_update(dt)
@@ -220,7 +267,33 @@ function draw_reconnect()
   gfx.print(RECONNECT.text, RECONNECT.x, RECONNECT.y)
 end
 
+-- Centered single-line caption in the foreground color
+
+function draw_caption(text, cx, y)
+  local font = gfx.getFont()
+  local tw = font:getWidth(text)
+  gfx.setColor(COLOR_FG)
+  gfx.print(text, cx - tw / 2, y)
+end
+
+-- Shown program-wide when no external mouse is present:
+-- a centered mouse with an unplugged USB plug beside it
+-- and a teacher-facing caption below. Reads the window
+-- directly so it works before any game has filled APP.
+
+function draw_no_mouse()
+  local w, h = love.graphics.getDimensions()
+  gfx.clear(COLOR_BG)
+  local s = h * NO_MOUSE.icon_h / SP.h
+  draw_plug_pair(w / 2, h / 2, s)
+  draw_caption(NO_MOUSE.text, w / 2, h / 2 + NO_MOUSE.text_dy)
+end
+
 function love.draw()
+  if not mouse_present() then
+    draw_no_mouse()
+    return
+  end
   if GS.mode == "game" then
     games[GS.active].draw()
   else
@@ -242,21 +315,30 @@ function active_game()
   return nil
 end
 
-function love.mousemoved(x, y, dx, dy)
+function love.mousemoved(x, y, dx, dy, istouch)
+  if not note_pointer(istouch) then
+    return
+  end
   local g = active_game()
   if g and g.moved then
     g.moved(dx, dy)
   end
 end
 
-function love.mousepressed(x, y, button)
+function love.mousepressed(x, y, button, istouch)
+  if not note_pointer(istouch) then
+    return
+  end
   local g = active_game()
   if g and g.pressed then
     g.pressed(button)
   end
 end
 
-function love.mousereleased(x, y, button)
+function love.mousereleased(x, y, button, istouch)
+  if not note_pointer(istouch) then
+    return
+  end
   local g = active_game()
   if g and g.released then
     g.released(button)
@@ -264,6 +346,7 @@ function love.mousereleased(x, y, button)
 end
 
 function love.wheelmoved(x, y)
+  GS.saw_mouse = true
   local g = active_game()
   if g and g.wheel then
     g.wheel(y)
@@ -284,7 +367,22 @@ function handle_escape()
   end
 end
 
+-- Ctrl+Alt+Up / Down adjust the active game's notch.
+-- The arrow keys are reserved: plain arrows are ignored
+-- (no mini-game uses them) and never reach game input.
+
+function handle_notch_chord(k)
+  if not (ctrl_down() and alt_down()) then
+    return
+  end
+  notch_teacher(k == "up" and 1 or -1)
+end
+
 function love.keypressed(k)
+  if k == "up" or k == "down" then
+    handle_notch_chord(k)
+    return
+  end
   if k == "escape" then
     if GS.mode == "game" then
       handle_escape()
