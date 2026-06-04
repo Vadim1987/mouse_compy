@@ -5,11 +5,6 @@
 
 APP = { }
 
-COMPY_SCREEN = {
-  w = 1024,
-  h = 600
-}
-
 -- Menu chrome
 
 COLOR_BG = {
@@ -192,10 +187,10 @@ WHEEL_WIN = {
 -- Scroll direction arrow above/below the window
 
 WHEEL_ARR = {
-  arr_up = 60,
-  arr_dn = 128,
-  arr_h = 10,
-  arr_w = 22,
+  arr_up = 56,
+  arr_dn = 132,
+  arr_h = 30,
+  arr_w = 26,
   arr_c = {
     0.059,
     0.914,
@@ -239,9 +234,9 @@ BARRIER = {
   fade = 0.15,
   place_tries = 16,
   color = {
-    1,
-    0,
-    0
+    0.5,
+    0.5,
+    0.52
   }
 }
 

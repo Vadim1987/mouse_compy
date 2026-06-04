@@ -160,16 +160,17 @@ end
 
 function len_cap(limit, along, across)
   if along <= 0 then
-    return limit
+    return math.huge
   end
   return (limit - barrier.thick * across) / along
 end
 
--- Sample orientation once; length = largest value
--- that meets the width, height, and area envelope.
+-- Sample orientation once; horizontal or vertical only
+-- (never diagonal). Length = largest value that meets
+-- the width, height, and area envelope.
 
 function barrier_shape()
-  barrier.angle = rand_range(0, math.pi / 2)
+  barrier.angle = love.math.random(0, 1) * math.pi / 2
   barrier.thick = APP.width * BARRIER.thick_frac
   local c, s = math.cos(barrier.angle), math.sin(barrier.angle)
   local lw = len_cap(APP.width * BARRIER.bbox_w_frac, c, s)
@@ -208,22 +209,6 @@ function barrier_place(px, py)
   end
 end
 
--- True if (px,py) lands within the bar at center x,y
-
-function barrier_local(px, py, cx, cy)
-  local dx, dy = px - cx, py - cy
-  local a = -barrier.angle
-  local c, s = math.cos(a), math.sin(a)
-  local lx = dx * c - dy * s
-  local ly = dx * s + dy * c
-  return math.abs(lx) <= barrier.len / 2
-       and math.abs(ly) <= barrier.thick / 2
-end
-
-function barrier_point(x, y, px, py)
-  return barrier_local(px, py, x, y)
-end
-
 function barrier_disc_at(px, py, r, cx, cy)
   local dx, dy = px - cx, py - cy
   local a = -barrier.angle
@@ -243,18 +228,19 @@ function barrier_hit_disc(px, py, r)
   return barrier_disc_at(px, py, r, barrier.x, barrier.y)
 end
 
+-- Mouse-vs-barrier as an axis-aligned box overlap. The
+-- sprite is far taller than wide, so a single disc of
+-- max(hx, hy) bumped too early on the sides. Barrier and
+-- mouse boxes are both axis-aligned, so compare extents.
+
 function barrier_hit_mouse(px, py)
-  local hx, hy = mm_half()
-  return barrier_hit_disc(px, py, math.max(hx, hy))
-end
-
--- Hit test for the mouse against the live barrier
-
-function barrier_hit(px, py)
   if not barrier.active then
     return false
   end
-  return barrier_local(px, py, barrier.x, barrier.y)
+  local hx, hy = mm_half()
+  local bw, bh = barrier_bbox()
+  return math.abs(px - barrier.x) <= hx + bw
+     and math.abs(py - barrier.y) <= hy + bh
 end
 
 -- Called on each cheese: appear or swap on schedule
@@ -380,10 +366,11 @@ function reset_mm_timers()
   mm.move_dir = 0
 end
 
--- Match APP to the target Compy screen.
+-- Match APP to the real drawable so the playfield fills
+-- the actual Compy surface, not a fixed logical size.
 
 function sync_screen()
-  APP.width, APP.height = COMPY_SCREEN.w, COMPY_SCREEN.h
+  APP.width, APP.height = love.graphics.getDimensions()
 end
 
 function meet.enter()
@@ -612,21 +599,7 @@ BTN_OF = {
   middle = "wheel"
 }
 
-WHEEL_OF = {
-  [4] = 1,
-  [5] = -1,
-  wu = 1,
-  wd = -1,
-  wheelup = 1,
-  wheeldown = -1
-}
-
 function meet_pressed(button)
-  local dy = WHEEL_OF[button]
-  if dy then
-    meet_wheel(dy)
-    return
-  end
   local zone = BTN_OF[button]
   if zone then
     mm.btn[zone] = true
@@ -652,7 +625,7 @@ function meet_right()
 end
 
 function meet_wheel(dy)
-  mm.wheel_vel = mm.wheel_vel + dy * WHEEL.scroll_rate
+  mm.wheel_vel = mm.wheel_vel - dy * WHEEL.scroll_rate
 end
 
 -- Input methods for the generic dispatch in main.

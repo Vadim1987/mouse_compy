@@ -11,55 +11,21 @@ gfx = love.graphics
 
 -- Event -> logical sound name
 
+-- Event -> library sound (compy.audio). The three marked
+-- below want non-library sounds Compy can't load, so each
+-- uses the library "beep" as a placeholder; when the real
+-- sounds are added to the library, set the names here.
+
 SND = {
-  move = "step",
+  move = "beep", -- TEMP beep; real sound: footsteps-5
   hit = "knock",
-  cheese = "powerup",
+  cheese = "beep", -- TEMP beep; real: powerup-8 (x2)
   click = "ping",
   bell = "win",
-  pop = "neutral"
+  pop = "beep" -- TEMP beep; real sound: neutral-l4
 }
-
--- Local sound files, by logical name. When a local file
--- is listed, it is the spec-selected sound for the event.
-
-LOCAL_SND = {
-  step = "footsteps-5.ogg",
-  powerup = "powerup-8.ogg",
-  neutral = "neutral-l4.ogg"
-}
-
-local_cache = { }
-
--- Resolve a name to a playable source
-
-function get_local(name)
-  local src = local_cache[name]
-  if src then
-    return src
-  end
-  src = love.audio.newSource(LOCAL_SND[name], "static")
-  local_cache[name] = src
-  return src
-end
-
-function play_local(name)
-  local src = get_local(name)
-  src:stop()
-  if src.play then
-    src:play()
-  else
-    love.audio.play(src)
-  end
-end
-
--- Spec-selected local sound if present, else standard lib
 
 function play(name)
-  if LOCAL_SND[name] then
-    play_local(name)
-    return
-  end
   local fn = compy.audio[name]
   if fn then
     fn()
@@ -221,18 +187,16 @@ end
 
 -- Touch on Android arrives as a synthetic mouse event
 -- with istouch = true; a real pointer event has it false.
--- SDL has no mouse-presence query, so presence is assumed
--- until touch-only use shows up: the no-mouse screen
--- appears only once touch has fired and no real pointer
--- ever has. A real pointer event is decisive and sticks.
+-- We record which we have seen (for the no-mouse screen)
+-- but never drop the event -- gameplay input must always
+-- reach the active game, so a click is never swallowed.
 
 function note_pointer(istouch)
   if istouch then
     GS.saw_touch = true
-    return false
+  else
+    GS.saw_mouse = true
   end
-  GS.saw_mouse = true
-  return true
 end
 
 function mouse_present()
@@ -316,9 +280,7 @@ function active_game()
 end
 
 function love.mousemoved(x, y, dx, dy, istouch)
-  if not note_pointer(istouch) then
-    return
-  end
+  note_pointer(istouch)
   local g = active_game()
   if g and g.moved then
     g.moved(dx, dy)
@@ -326,9 +288,7 @@ function love.mousemoved(x, y, dx, dy, istouch)
 end
 
 function love.mousepressed(x, y, button, istouch)
-  if not note_pointer(istouch) then
-    return
-  end
+  note_pointer(istouch)
   local g = active_game()
   if g and g.pressed then
     g.pressed(button)
@@ -336,9 +296,7 @@ function love.mousepressed(x, y, button, istouch)
 end
 
 function love.mousereleased(x, y, button, istouch)
-  if not note_pointer(istouch) then
-    return
-  end
+  note_pointer(istouch)
   local g = active_game()
   if g and g.released then
     g.released(button)

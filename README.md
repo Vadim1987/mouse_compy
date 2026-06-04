@@ -137,20 +137,21 @@ only built games.
 
 ## Sound
 
-`play(name)` checks `compy.audio[name]` first, then a local
-`*.ogg` next to the project. Event-to-sound mapping (`SND` in
-`main.lua`):
+`play(name)` calls `compy.audio[name]` -- all sounds come from
+the standard library. Non-library (local file) sounds are not
+available on Compy, so the events wanting one use the library
+`beep` as a placeholder until the real sounds are added.
+Event-to-sound mapping (`SND` in `main.lua`):
 
-- movement -> `step`, wall/barrier hit -> `knock`,
-  cheese delight -> `powerup`, button click -> `ping`,
-  find hover -> `win`, bubble pop -> `neutral`.
-- In the standard lib: `knock`, `win`, `ping`.
-- Local files (`LOCAL_SND`): `step` = `footsteps-5.ogg`,
-  `powerup` = `powerup-8.ogg`, `neutral` = `neutral-l4.ogg`.
+- wall/barrier hit -> `knock`, button click -> `ping`,
+  find hover -> `win` -- library sounds.
+- movement, cheese delight, bubble pop -> placeholder `beep`.
+  Intended once added to the library: movement -> `footsteps-5`,
+  cheese -> `powerup-8` (played twice), pop -> `neutral-l4`.
+  Swap the three names in `SND` to finish.
 
-The three local `.ogg` are micro:bit built-in sounds (MIT,
-Lancaster University) — see `SOUND-LICENSE.md`. The pop file
-is `neutral-l4.ogg` (lowercase L).
+The intended movement/cheese/pop sounds are micro:bit built-in
+sounds (MIT, Lancaster University) -- see `SOUND-LICENSE.md`.
 
 ## Tinted layers
 
@@ -211,8 +212,11 @@ line to `GAMES` and `games`. No changes to main's callbacks.
   box while the body logo sits in the lower half of the
   250x440 body, so the runtime places the phases onto the
   body-logo position for the wink to land in place.
-- Local asset paths (the `*.ogg` sounds and layer files)
-  resolve relative to the project's working directory on Compy.
+- Audio is limited to the standard library (`compy.audio`);
+  non-library (local file) sounds are not available on Compy,
+  so movement/cheese/pop use a placeholder beep until the real
+  sounds are added to the library (see Sound). Layer `.lua`
+  files load via `require` from the program directory.
 - `mouse_present()` is heuristic. SDL 2.28.5 exposes no
   mouse-presence query and no connect/disconnect event, so the
   program assumes a mouse is present at launch and shows the

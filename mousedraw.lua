@@ -194,15 +194,25 @@ end
 
 -- Arrow triangle above (dir<0) or below (dir>0)
 
+function arrow_points(cx, ay, h, hw)
+  return {
+    cx,
+    ay + h,
+    cx - hw,
+    ay,
+    cx + hw,
+    ay
+  }
+end
 function scroll_arrow(dir)
   local cx = WHEEL_WIN.pel_x + WHEEL_WIN.pel_w / 2
   local ay = (dir < 0) and WHEEL_ARR.arr_up
     or WHEEL_ARR.arr_dn
   local h = WHEEL_ARR.arr_h * dir
+  local hw = WHEEL_ARR.arr_w / 2
+  local p = arrow_points(cx, ay, h, hw)
   set_color(WHEEL_ARR.arr_c)
-  gfx.polygon("fill", cx, ay + h,
-    cx - WHEEL_ARR.arr_w / 2, ay,
-    cx + WHEEL_ARR.arr_w / 2, ay)
+  gfx.polygon("fill", p)
 end
 
 function draw_scroll()
